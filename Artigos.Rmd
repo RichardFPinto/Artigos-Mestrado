@@ -1,0 +1,1051 @@
+Codigo utilizado para criação de artigos, foi um trabalho focado na exploratoria de dados sobre o volume mensal de transções em dolares.
+
+Pacotes
+```{r}
+library(stringr)
+library(tibble)
+library(dplyr)
+library(fpp3)
+library(e1071)
+library(forecast)
+library(ggplot2)
+library(car)
+library(nortest)
+library(FinTS)
+library(urca)
+library(tseries)
+library(seastests)
+library(trend)
+```
+
+Dados
+
+```{r}
+dados_orig = read.table("F:/Faculdade/Mestrado/Orientação/Dissertação/Eth.txt", header = T, sep = "\t", encoding = "utf-8")
+```
+
+Arrumando as datas dos dados
+
+```{r}
+df_dia = str_sub(dados_orig$Date ,start = 5, end = 6)
+df_mes = str_sub(dados_orig$Date ,start = 1,end = 3)
+df_ano = str_sub(dados_orig$Date ,start = 9, end = 12)
+df_mes= str_replace_all(df_mes,c("Jan"="01","Feb"="02","Mar"="03","Apr"="04","May"="05","Jun"="06","Jul"="07","Aug"="08","Sep"="09","Oct"="10","Nov"= "11","Dec"="12"))
+datas = as.data.frame(str_c(df_ano,df_mes,df_dia,sep="/"))
+```
+
+Colocando o formato dos volumes para ser utilizado na serie do temporal
+
+```{r}
+Volume = (dados_orig$Volume)
+Volume = str_replace_all(Volume,"[$,]","")
+Volume = as.numeric(Volume)
+```
+
+Organizando as colunas organizadas em um novo dataframe
+
+```{r}
+df = cbind(datas,Volume)
+colnames(df) = c("Data","volume")
+```
+
+Mutando a coluna para o formato date
+
+```{r}
+df = df %>% mutate(Data = as_date(Data))
+df_serie = df %>% mutate(Data = yearmonth(Data))
+df_serie = df_serie  %>% group_by(Data) %>% summarise(volume = sum(volume))
+df_serie = df_serie %>% as_tsibble(index = Data)
+```
+
+Criando um novo arquivo para os proximos trabalhos envolvendo o volume
+
+```{r}
+write.table(x = df ,file = "Volumeethereum.txt", sep = "\t", dec = ".", row.names = FALSE, col.names = TRUE, append = FALSE)
+```
+
+Analise de dados
+
+Dando uma primeira olhada na serie utilizando um grafico
+
+```{r}
+ggplot(data= df_serie, aes(x= Data , y = volume)) + geom_line()+ labs(title = "")+ xlab("Meses")+ ylab("Dólares") +
+  theme(axis.text.x = element_text(color = "grey20", size =30, angle = 0, hjust = .5, vjust = .5, face = "plain"),
+        axis.text.y = element_text(color = "grey20", size = 30, angle = 0, hjust = 1, vjust = 0, face = "plain"),  
+        axis.title.x = element_text(color = "grey20", size = 40, angle = 0, hjust = .5, vjust = 0, face = "plain"),
+        axis.title.y = element_text(color = "grey20", size = 40, angle = 90, hjust = .5, vjust = .5, face = "plain"))
+```
+
+Utilizando o boxplot e histograma para ajudar graficamente a compreender a serie
+
+Boxplot
+```{r}
+ggplot(data= df_serie, aes(y = volume))  + geom_boxplot()+ labs(title = )+ xlab("")+ ylab("Volume") +
+  theme(axis.text.x = element_text(color = "grey20", size =15, angle = 0, hjust = .5, vjust = .5, face = "plain"),
+        axis.text.y = element_text(color = "grey20", size = 15, angle = 0, hjust = 1, vjust = 0, face = "plain"),  
+        axis.title.x = element_text(color = "grey20", size = 20, angle = 0, hjust = .5, vjust = 0, face = "plain"),
+        axis.title.y = element_text(color = "grey20", size = 20, angle = 90, hjust = .5, vjust = .5, face = "plain"),
+        plot.title = element_text(size = 30, hjust=0.5))
+```
+
+Histograma
+```{r}
+ggplot(data= df_serie, aes(y = volume))  + geom_histogram()+ labs(title = )+ xlab("")+ ylab("Volume") +
+  theme(axis.text.x = element_text(color = "grey20", size =15, angle = 0, hjust = .5, vjust = .5, face = "plain"),
+        axis.text.y = element_text(color = "grey20", size = 15, angle = 0, hjust = 1, vjust = 0, face = "plain"),  
+        axis.title.x = element_text(color = "grey20", size = 20, angle = 0, hjust = .5, vjust = 0, face = "plain"),
+        axis.title.y = element_text(color = "grey20", size = 20, angle = 90, hjust = .5, vjust = .5, face = "plain"),
+        plot.title = element_text(size = 30, hjust=0.5))
+
+```
+
+
+
+Como o coeficiente de variação não é uma função nativa do R foi criado a função manualmente
+
+```{r}
+cv = function(x){
+        coef = (sd(x, na.rm = T )/mean(x, na.rm = T))*100
+        return(coef)
+}
+```
+
+Analisando as metricas da serie
+
+```{r}
+summary(df_serie$volume)
+var(df_serie$volume)
+sd(df_serie$volume)
+cv(df_serie$volume)
+skewness(df_serie$volume, na.rm = T)
+kurtosis(df_serie$volume, na.rm = T)
+```
+
+Teste de normalidade pra ver se os dados são normalmente distribuídos, foi utilizado mais de um teste para confirmar a teoria
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(df_serie$volume))
+# shapiro test
+shapiro.test(df_serie$volume)
+# Anderson-Darling
+ad.test(df_serie$volume)
+```
+
+Como os dados não apresentam a normalidade, continuando as analise com os graficos os quais foram usados para corroborar com os testes para analise da normalidade da serie
+
+```{r}
+qqnorm(df_serie$volume, main = "Volume de Etherium - Normal Q-Q plot") 
+qqline(df_serie$volume)
+```
+
+Decompondo a serie para testar a analise de sazonalidade e tendencia, multiplicativo e aditivo
+
+Multiplicativo
+
+```{r}
+dcmp_m <- df_serie %>% model(STL(volume ~ trend(window = 12) + 
+                           season(window = "periodic"),robust = TRUE, "multiplicative"))
+dcmp_m %>% components()
+```
+
+Grafico da decomposição multiplicativa
+
+```{r}
+dcmp_m %>% components()%>% autoplot() + labs(title = "")+ xlab("Meses")+ ylab("Dólares") +
+  theme(axis.text.x = element_text(color = "grey20", size =30, angle = 0, hjust = .5, vjust = .5, face = "plain"),
+        axis.text.y = element_text(color = "grey20", size = 30, angle = 0, hjust = 1, vjust = 0, face = "plain"),  
+        axis.title.x = element_text(color = "grey20", size = 40, angle = 0, hjust = .5, vjust = 0, face = "plain"),
+        axis.title.y = element_text(color = "grey20", size = 40, angle = 90, hjust = .5, vjust = .5, face = "plain"))
+```
+
+Aditivo
+
+```{r}
+dcmp_a <- df_serie %>% model(STL(volume ~ trend(window = 12) + 
+                           season(window = "periodic"),robust = TRUE, "additive))
+dcmp_a %>% components()
+```
+
+Grafico da decomposição multiplicativa
+
+```{r}
+dcmp_a %>% components()%>% autoplot() + labs(title = "")+ xlab("Meses")+ ylab("Dólares") +
+  theme(axis.text.x = element_text(color = "grey20", size =30, angle = 0, hjust = .5, vjust = .5, face = "plain"),
+        axis.text.y = element_text(color = "grey20", size = 30, angle = 0, hjust = 1, vjust = 0, face = "plain"),  
+        axis.title.x = element_text(color = "grey20", size = 40, angle = 0, hjust = .5, vjust = 0, face = "plain"),
+        axis.title.y = element_text(color = "grey20", size = 40, angle = 90, hjust = .5, vjust = .5, face = "plain"))
+```
+
+Graficos das subseries e o boxplot por mes e ano, colaborando com as apresentação graficas da decomposições
+
+Subseries
+
+```{r}
+df_serie %>% gg_subseries(volume) + ylab("Dólares") +
+  ggtitle("")+ xlab("Anos") + theme(axis.text.x = element_text(color = "grey20", size = 30, angle = 0, hjust = .5, vjust = .5, face = "plain"),
+                                    axis.text.y = element_text(color = "grey20", size = 30, angle = 0, hjust = 1, vjust = 0, face = "plain"),  
+                                    axis.title.x = element_text(color = "grey20", size = 40, angle = 0, hjust = .5, vjust = 0, face = "plain"),
+                                    axis.title.y = element_text(color = "grey20", size = 40, angle = 90, hjust = .5, vjust = .5, face = "plain"))
+```
+
+Boxplot 
+```{r}
+boxplot(df_serie$volume ~ df_an$Mes)
+boxplot(df_serie$volume ~ df_an$Ano)
+```
+
+Agora realizando testes de sazonalidade, inicialmente utilizando ANOVA
+
+Organizando os dados o dataframe para o ANOVA com blocos
+
+Para os blocos que não iniciavam em janeiro e terminavam em dezembro, desenvolvi uma pequena função a qual criava repetições dos blocos para conseguir analisar corretamente.
+
+Função
+
+```{r}
+Anos = function(x,k = 0){
+  zn = rep(1,12)
+  for (i in 2:x){
+    zi = rep(i,12)
+    zn = c(zn, zi)
+  }
+  if (k != 0) {
+    v = x+1
+    zz = rep(v,k)
+    zn = c(zn, zz)
+  }
+  return(as.data.frame(as.factor(zn)))
+}
+```
+
+Transformando a os dados para ser utilizado no ANOVA
+
+```{r}
+df_anova = cbind(as.data.frame( str_split_fixed(df_serie$Data," ",n =2 )), 
+              df_serie$volume)
+x = Anos(6)
+df_anova = cbind(df_anova,x)
+colnames(df_anova) = c("Ano", "Mes", "Volume", "Bloco")
+df_anova$Mes = as.factor(df_anova$Mes)
+df_anova$Ano = as.factor(df_anova$Ano)
+df_anova$Bloco = as.factor(df_anova$Bloco)
+df_anova= as_tibble(df_anova)
+df_anova
+```
+
+```{r}
+anova = aov(Volume ~ Mes + Bloco, data = df_anova )
+anova
+```
+
+Analisando o ANOVA
+
+```{r}
+summary(anova)
+fitted.values(anova)
+residuals(anova)
+res = residuals(anova)
+```
+
+Olhando graficamente os residuos
+
+```{r}
+qqnorm(res, ylab = "Frequência", xlab = "Resíduos")
+qqline(res, ylab = "Frequência", xlab = "Resíduos")
+```
+
+
+Agora para validar os resultados do ANOVA precisamos testar a normalidade, homocedasticidade e a independência dos residuos
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_ha))
+# Homocedastidade
+ArchTest(res_ha)
+#teste de independência
+Box.test(res_ha, lag = 10, type = "Ljung-Box")
+```
+
+Como um dos teste falha, é necessario utilizar o teste de Friedman para verificar a sazonalidade
+
+```{r}
+friedman.test(df_anova$Volume,df_anova$Mes, df_anova$Bloco)
+```
+
+Realizando outros dois teste de sazonalidade
+
+```{r}
+qs(df_an$Volume, freq = 12)
+wo(df_an$Volume, freq = 12)
+```
+
+Agora realizando teste de Tendencia, para a confirmação da tendencia apresentada na decomposição.
+
+```{r}
+#Cox and Stuart Trend Test
+cs.test(df_an$Volume)
+#Mann-Kendall Trend Test
+rank.test(df_an$Volume, "left.sided")
+# Wald-Wolfowitz
+runs.test(df_an$Volume, "left.sided")
+```
+
+Agora para a compração de modelos primeiro foi transformado para log da serie.
+
+```{r}
+df_log = df_serie
+df_log$volume = log(df_serie$volume)
+```
+
+Analisando as metricas do log da serie
+
+```{r}
+summary(df_log$volume)
+var(df_log$volume)
+sd(df_log$volume)
+cv(df_log$volume)
+skewness(df_log$volume, na.rm = T)
+kurtosis(df_log$volume, na.rm = T)
+```
+
+Teste de normalidade pra ver se os dados são normalmente distribuídos, foi utilizado mais de um teste para confirmar a teoria
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(df_log$volume))
+# shapiro test
+shapiro.test(df_log$volume)
+# Anderson-Darling
+ad.test(df_log$volume)
+```
+
+Transformando em uma serie temporal
+
+```{r}
+ts_serie = ts(df_log[,2],start = c(2015,8) ,frequency = 12 )
+```
+
+Separando entre teste e treino
+
+```{r}
+treino = window(ts_serie, start = c(2015,8), end = c(2021,4), frequency = 12)
+teste =  window(ts_serie, start = c(2022,4), frequency = 12)
+```
+
+Foi utilizado a mesma seed em todos para melhor comparação
+
+# Modelo Ingenuo
+
+```{r}
+set.seed(1234)
+ing = rwf(treino, h = 12)
+```
+
+Summary
+
+```{r}
+summary(ing)
+```
+
+Residuos
+
+```{r}
+res_ing = residuals(ing)
+summary(res_ing)
+skewness(na.omit(res_ing))
+kurtosis(na.omit(res_ing))
+```
+
+Grafico
+
+```{r}
+plot(res_ing)
+hist(res_ing)
+acf(na.omit(res_ing))
+```
+
+Teste nos residuos
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_ing))
+# Homocedastidade
+ArchTest(res_ing)
+# Independência
+Box.test(res_ing, lag = 10, type = "Ljung-Box")
+```
+
+Precisão
+
+```{r}
+accuracy(ing$mean,teste)
+```
+
+Previsão
+
+```{r}
+plot(ing, ylab = "Dólares", main="Método Média", fcol="white")
+lines(fitted(ing), col="red")
+lines(ing$mean, col="red", type="o")
+```
+
+
+# Modelo média
+
+```{r}
+set.seed(1234)
+media = meanf(treino,h = 12)
+```
+
+Summary
+
+```{r}
+summary(media)
+```
+
+Residuos
+
+```{r}
+res_m = residuals(media)
+summary(res_m)
+skewness(res_m)
+kurtosis(res_m)
+```
+
+Grafico
+
+```{r}
+plot(res_m)
+hist(res_m)
+acf(res_m)
+```
+
+Teste nos residuos
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_m))
+# Homocedastidade
+ArchTest(res_m)
+# Independência
+Box.test(res_m, lag = 10, type = "Ljung-Box")
+```
+
+Precisão
+
+```{r}
+accuracy(media$mean,teste)
+```
+
+Previsão
+
+```{r}
+plot(media, ylab = "Dólares", main="Método Média", fcol="white")
+lines(fitted(media), col="red")
+lines(media$mean, col="red", type="o")
+```
+
+Modelo drift
+
+```{r}
+set.seed(1234)
+drift = rwf(treino, h = 12, drift = T)
+```
+
+Summary
+
+```{r}
+summary(drift)
+```
+
+Residuos
+
+```{r}
+res_d = residuals(drift)
+summary(res_d)
+skewness(na.omit(res_d))
+kurtosis(na.omit(res_d))
+```
+
+Grafico
+
+```{r}
+plot(res_d)
+hist(res_d)
+acf(na.omit(res_d))
+
+```
+
+Teste nos residuos
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_d))
+# Homocedastidade
+ArchTest(res_d)
+#teste de independência
+Box.test(res_d, lag = 10, type = "Ljung-Box")
+```
+
+Precisão
+
+```{r}
+accuracy(drift$mean,teste)
+```
+
+Previsão
+
+```{r}
+plot(drift, ylab = "Dólares", main="Método Drift", fcol="white")
+lines(fitted(drift), col="red")
+lines(drift$mean, col="red", type="o")
+```
+
+# Modelo naive
+
+```{r}
+set.seed(1234)
+naive = naive(treino, h=12)
+```
+
+Summary
+
+```{r}
+summary(naive)
+```
+
+Residuos
+
+```{r}
+res_n = residuals(naive)
+summary(res_n)
+skewness(na.omit(res_n))
+kurtosis(na.omit(res_n))
+```
+
+Grafico
+
+```{r}
+plot(res_n)
+hist(res_n)
+acf(na.omit(res_n))
+```
+
+Teste nos residuos
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_n))
+# Homocedastidade
+ArchTest(res_n)
+#teste de independência
+Box.test(res_n, lag = 10, type = "Ljung-Box")
+
+```
+
+Precisão
+
+```{r}
+accuracy(naive$mean,teste)
+```
+
+Previsão
+
+```{r}
+plot(naive, ylab = "Dólares", main="Método Drift", fcol="white")
+lines(fitted(naive), col="red")
+lines(naive$mean, col="red", type="o")
+```
+
+# Modelo de holt-winter
+
+```{r}
+set.seed(1234)
+holt_a = hw(treino,seasonal="additive",damped = FALSE)
+holt_m = hw(treino,seasonal="multiplicative",damped = FALSE)
+holt_da = hw(treino,seasonal="additive",damped = TRUE)
+holt_dm = hw(treino,seasonal="multiplicative",damped = TRUE)
+```
+
+Summary
+```{r}
+summary(holt_a)
+summary(holt_m)
+summary(holt_da)
+summary(holt_dm)
+```
+
+# Aditivo
+
+Residuos
+
+```{r}
+res_ha = residuals(holt_a)
+res_hda = residuals(holt_da)
+summary(res_ha)
+skewness(na.omit(res_ha))
+kurtosis(na.omit(res_ha))
+```
+
+Damped
+
+```{r}
+summary(res_hda)
+skewness(na.omit(res_hda))
+kurtosis(na.omit(res_hda))
+```
+
+grafico
+
+```{r}
+plot(res_ha)
+hist(res_ha)
+acf(na.omit(res_ha))
+```
+
+Damped
+
+```{r}
+plot(res_hda)
+hist(res_hda)
+acf(na.omit(res_hda))
+```
+
+Teste dos residuos
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_ha))
+# Homocedastidade
+ArchTest(res_ha)
+#teste de independência
+Box.test(res_ha, lag = 10, type = "Ljung-Box")
+```
+
+Damped
+
+```{r}
+
+jarque.bera.test(na.omit(res_hda))
+# Homocedastidade
+ArchTest(res_hda)
+#teste de independência
+Box.test(res_hda, lag = 10, type = "Ljung-Box")
+```
+
+```{r}
+prev_a <- holt_a %>% forecast(h = 12)
+prev_a
+
+prev_da <- holt_da %>% forecast(h = 12)
+prev_da
+```
+
+precisão
+```{r}
+accuracy(prev_a$mean,teste)
+accuracy(prev_da$mean,teste)
+```
+
+
+# Multiplicativo
+
+Residuos
+```{r}
+res_hm = residuals(holt_m)
+summary(res_hm)
+skewness(na.omit(res_hm))
+kurtosis(na.omit(res_hm))
+```
+ 
+Damped
+
+```{r}
+res_hdm = residuals(holt_dm)
+summary(res_hdm)
+skewness(na.omit(res_hdm))
+kurtosis(na.omit(res_hdm))
+```
+
+
+Grafico
+
+```{r}
+plot(res_hm)
+hist(res_hm)
+acf(na.omit(res_hm))
+```
+
+Damped
+
+```{r}
+plot(res_hdm)
+hist(res_hdm)
+acf(na.omit(res_hdm))
+```
+
+Testes do residuos
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_hm))
+# Homocedastidade
+ArchTest(res_hm)
+#teste de independência
+Box.test(res_hm, lag = 10, type = "Ljung-Box")
+```
+
+Damped
+
+```{r}
+# Normalidade
+jarque.bera.test(na.omit(res_hdm))
+# Homocedastidade
+ArchTest(res_hdm)
+#teste de independência
+Box.test(res_hdm, lag = 10, type = "Ljung-Box")
+```
+
+```{r}
+prev_m <- holt_m %>% forecast(h = 12)
+prev_m
+prev_dm <- holt_dm %>% forecast(h = 12)
+prev_dm
+```
+
+Precisão
+
+```{r}
+accuracy(prev_m$mean, teste)
+accuracy(prev_dm$mean, teste)
+```
+
+Previsão
+```{r}
+plot(prev_a, ylab = "Dólares", main="Método Holt Aditivo", fcol="white")
+lines(prev_a$fitted, lty=2, col="blue")
+plot(prev_m, ylab = "Dólares", main="Método Holt Multiplicativo", fcol="white")
+lines(prev_m$fitted, lty=2, col="red")
+plot(prev_da, ylab = "Dólares", main="Método Holt Aditivo Amortecido", fcol="white")
+lines(prev_a$fitted, lty=2, col="green")
+plot(prev_dm, ylab = "Dólares", main="Método Holt Multiplicativo Amortecido", fcol="white")
+lines(prev_m$fitted, lty=2, col="yellow")
+```
+
+# ARIMA
+
+Para iniciar a criação do ARIMA, primeiro utilizaremos os teste ADF, dividindo em parte sazonal e não sazonal
+
+Parte com sazonalidade
+```{r}
+adf.trends = ur.df(diff(serie, lag = 12), type = c("trend"), lags = 24 , selectlags = "AIC")
+summary(adf.trends)
+
+adf.drifts = ur.df(diff(serie, lag = 12), type = c("drift"), lags = 24 , selectlags = "BIC")
+summary(adf.drifts)
+
+adf.nones = ur.df(diff(serie, lag = 12), type = c("none"), lags = 24 , selectlags = "BIC")
+summary(adf.nones)
+```
+
+1° Diferenciação
+
+```{r}
+adfd.trends = ur.df(diff(diff(serie, lag = 12)), type = c("trend"), lags = 24 , selectlags = "AIC")
+summary(adfd.trends)
+
+adfd.drifts = ur.df(diff(diff(serie, lag = 12)), type = c("drift"), lags = 24 , selectlags = "BIC")
+summary(adfd.drifts)
+
+adfd.nones = ur.df(diff(diff(serie, lag = 12)), type = c("none"), lags = 24 , selectlags = "BIC")
+summary(adfd.nones)
+```
+
+Teste para confirmar o numero de diferenciações necessarias para ser utilizado
+
+```{r}
+nsdiffs(serie, test = "seas", alpha = 0.05) # mais usado
+nsdiffs(serie, test = "ocsb", alpha = 0.05) #tem gente que diz que é o melhor
+nsdiffs(serie, test = "hegy", alpha = 0.05) 
+```
+
+Parte sem sazonalidade
+
+```{r}
+adf.trend = ur.df(serie, type = c("trend") ,lags = 24 ,selectlags = "AIC")
+summary(adf.trend)
+
+adf.drift = ur.df(serie, type = c("drift"),lags = 24, selectlags = "BIC")
+summary(adf.drift)
+
+adf.none = ur.df(ts_serie, type = c("none"),lags = 24, selectlags = "BIC")
+summary(adf.none)
+```
+
+1° diferenciação
+
+```{r}
+
+adfd.trend = ur.df(diff(serie), type = c("trend") ,lags = 24 ,selectlags = "AIC")
+summary(adfd.trend)
+
+adfd.drift = ur.df(diff(serie), type = c("drift"),lags = 24, selectlags = "BIC")
+summary(adfd.drift)
+
+adfd.none = ur.df(diff(serie), type = c("none"),lags = 24, selectlags = "BIC")
+summary(adfd.none)
+```
+
+Para confirmar o numero de diferenciações da parte não sazonal
+
+```{r}
+ndiffs(serie, test = "adf", alpha = 0.05)
+ndiffs(serie, test = "kpss", alpha = 0.05)
+ndiffs(serie, test = "pp", alpha = 0.05)
+```
+
+Agora o plot da serie com e sem diferenciação, para observar a diferença
+
+```{r}
+plot(serie)
+plot(diff(serie))
+```
+
+Agora plotando graficos ACF e PACF, para a avaliação da autocorrelação
+```{r}
+Acf(diff(serie,lags =12) , lag.max = 36)
+Pacf(diff(serie,lags =12) , lag.max = 36)
+```
+
+Função pra analisar todos as possibilidades do modelo arima e posteiormente avaliar o melhor BIC (o menor valor) entre os modelos, mesmo com o ACF e PACF como eles são subjetivos prefiro testar de 0 a 3 todas as possibilidades para não ter problema com de deixar algum modelo de fora.
+
+```{r}
+T_arima = function(p = 0, d = 0,q = 0,P = 0, D = 0,Q = 0, y = 10, dados = treino){
+  x = 0
+  BIC = c()
+  Modelos = c()
+  for (w in 0:p){
+    for (e in 0:q) {
+      for (W in 0:P) {
+        for (E in 0:Q) {
+          x = x+1
+          g = paste("Modelo numero:", x,w,d,e,W,D,E)
+          tryCatch({
+            set.seed(1234)
+            mod = Arima(dados,order=c(w, d, e),seasonal=list(order=c(W,D, E), period=12))
+            c = mod$bic
+            }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+          Modelos = c(Modelos,g)
+          BIC = c(BIC,c)
+          }
+       }
+    }
+  }
+  Tab_arima = as.data.frame(cbind(Modelos,BIC))
+  Tab_arima$C = as.numeric(Tab_arima$BIC)
+  Tab_arima = Tab_arima[order(BIC),]
+  print(head(Tab_arima,y))
+}
+```
+
+Utilizando a função acima que vai de 0 à  3 no p,q,P e Q e com d e D como 1, como analisado anteriormente como serão 256 modelos serão mostrados somente os 10 melhores nos resultados do BIC e iremos analisar o melhor entre eles.
+
+```{r}
+T_arima(3,1,3,3,1,3,10)
+```
+
+
+Alguns combinações apresentam problemas e para tentar resolver isso é necessario fazer eles a mão testando metodos quais são “Nelder-Mead”, “BFGS”, “CG”, “L-BFGS-B”, “SANN”, “Brent”. Mesmo assim alguns deles podem apresentar erro, dificilmente algum modelo que necessite de metodos apresentaram um melhor resultado, então os que deram problema não foram excluido da analise.
+
+```{r}
+set.seed(1234)
+#mod75 = Arima(treino, optim.method =  "SANN",order=c(1, 1, 0),seasonal=list(order=c(2,1, 2), period=12))
+mod76 = Arima(treino, optim.method =  "CG",order=c(1, 1, 0),seasonal=list(order=c(2,1, 3), period=12))
+mod77 = Arima(treino, optim.method =  "CG",order=c(1, 1, 0),seasonal=list(order=c(3,1, 0), period=12))
+mod78 = Arima(treino, optim.method =  "SANN",order=c(1, 1, 0),seasonal=list(order=c(3,1,1), period=12))
+mod79 = Arima(treino, optim.method =  "CG",order=c(1, 1, 0),seasonal=list(order=c(3,1,2), period=12))
+mod80 = Arima(treino, optim.method =  "CG",order=c(1, 1, 0),seasonal=list(order=c(3,1,1), period=12))
+mod81 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 1),seasonal=list(order=c(0,1,0), period=12))
+
+mod89 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 1),seasonal=list(order=c(2,1,1), period=12))
+
+mod92 = Arima(treino, optim.method =  "CG",order=c(1, 1, 1),seasonal=list(order=c(2,1,3), period=12))
+mod93 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 1),seasonal=list(order=c(3,1,0), period=12))
+#mod94 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 1),seasonal=list(order=c(3,1,1), period=12))
+#mod95 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 1),seasonal=list(order=c(3,1,2), period=12))
+mod96 = Arima(treino, optim.method =  "SANN",order=c(1, 1, 1),seasonal=list(order=c(3,1,3), period=12))
+mod97 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 2),seasonal=list(order=c(0,1,0), period=12))
+
+mod107 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 2),seasonal=list(order=c(2,1,2), period=12))
+#mod109 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 2),seasonal=list(order=c(3,1,0), period=12))
+#mod110 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 2),seasonal=list(order=c(3,1,1), period=12))
+mod111 = Arima(treino, optim.method =  "SANN",order=c(1, 1, 2),seasonal=list(order=c(3,1,2), period=12))
+mod112 = Arima(treino, optim.method =  "SANN",order=c(1, 1, 2),seasonal=list(order=c(3,1,3), period=12))
+mod113 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 3),seasonal=list(order=c(0,1,0), period=12))
+
+mod123 = Arima(treino, optim.method =  "Nelder-Mead",order=c(1, 1, 3),seasonal=list(order=c(2,1,2), period=12))
+
+#mod125 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,0), period=12))
+#mod126 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,1), period=12))
+#mod127 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,2), period=12))
+#mod128 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,3), period=12))
+
+mod144 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 0),seasonal=list(order=c(3,1,2), period=12))
+
+mod153 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 1),seasonal=list(order=c(2,1,0), period=12))
+
+mod155 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 1),seasonal=list(order=c(2,1,2), period=12))
+mod156 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 1),seasonal=list(order=c(2,1,3), period=12))
+
+mod161 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 2),seasonal=list(order=c(0,1,0), period=12))
+mod162 = Arima(treino, optim.method =  "CG",order=c(2, 1, 2),seasonal=list(order=c(0,1,1), period=12))
+mod163 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 2),seasonal=list(order=c(0,1,2), period=12))
+mod164 = Arima(treino, optim.method =  "CG",order=c(2, 1, 2),seasonal=list(order=c(0,1,3), period=12))
+
+mod176 = Arima(treino, optim.method =  "SANN",order=c(2, 1, 2),seasonal=list(order=c(3,1,3), period=12))
+
+mod178 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 3),seasonal=list(order=c(0,1,1), period=12))
+mod179 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 3),seasonal=list(order=c(0,1,2), period=12))
+mod180 = Arima(treino, optim.method =  "Nelder-Mead",order=c(2, 1, 3),seasonal=list(order=c(0,1,3), period=12))
+
+mod192 = Arima(treino, optim.method =  "SANN",order=c(2, 1, 3),seasonal=list(order=c(3,1,3), period=12))
+
+mod219 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 1),seasonal=list(order=c(2,1,3), period=12))
+
+mod225 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 2),seasonal=list(order=c(0,1,0), period=12))
+
+mod228 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 1),seasonal=list(order=c(2,1,3), period=12))
+
+mod232 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 2),seasonal=list(order=c(1,1,3), period=12))
+mod233 = Arima(treino, optim.method =  "CG",order=c(3, 1, 2),seasonal=list(order=c(2,1,0), period=12))
+mod234 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 2),seasonal=list(order=c(2,1,1), period=12))
+mod235 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 2),seasonal=list(order=c(2,1,1), period=12))
+
+mod240 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 2),seasonal=list(order=c(3,1,3), period=12))
+
+mod244 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 3),seasonal=list(order=c(0,1,3), period=12))
+
+mod249 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 3),seasonal=list(order=c(2,1,0), period=12))
+
+mod251 = Arima(treino, optim.method =  "Nelder-Mead",order=c(3, 1, 0),seasonal=list(order=c(2,1,2), period=12))
+
+mod255 = Arima(treino, optim.method =  "CG",order=c(3, 1, 3),seasonal=list(order=c(3,1,2), period=12))
+mod256 = Arima(treino, optim.method =  "SANN",order=c(3, 1, 3),seasonal=list(order=c(3,1,3), period=12))
+```
+```{r}
+#mod75$bic
+mod76$bic
+mod77$bic
+mod78$bic
+#mod79$bic
+mod80$bic
+mod81$bic
+
+mod89$bic
+
+mod92$bic
+mod93$bic
+#mod94 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 1),seasonal=list(order=c(3,1,1), period=12))
+#mod95 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 1),seasonal=list(order=c(3,1,2), period=12))
+mod96$bic
+mod97$bic
+
+mod107$bic
+#mod109 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 2),seasonal=list(order=c(3,1,0), period=12))
+#mod110 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 2),seasonal=list(order=c(3,1,1), period=12))
+mod111$bic
+mod112$bic
+mod113$bic
+
+mod123$bic
+
+#mod125 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,0), period=12))
+#mod126 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,1), period=12))
+#mod127 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,2), period=12))
+#mod128 = Arima(treino, optim.method =  "Brent",order=c(1, 1, 3),seasonal=list(order=c(3,1,3), period=12))
+
+mod144$bic
+
+mod153$bic
+
+mod155$bic
+mod156$bic
+
+mod161$bic
+mod162$bic
+mod163$bic
+mod164$bic
+
+mod176$bic
+
+mod178$bic
+mod179$bic
+#mod180$bic
+
+mod192$bic
+
+mod219$bic
+
+mod225$bic
+
+mod228$bic
+
+mod232$bic
+mod233$bic
+mod234$bic
+mod235$bic
+
+mod240$bic
+
+mod244$bic
+
+mod249$bic
+
+mod251$bic
+
+mod255$bic
+mod256$bic
+```
+
+agora analisando o modelo que obteve melhore resultado
+
+```{r}
+set.seed(1234)
+mod2 = Arima(treino,order=c(0, 1, 0),seasonal=list(order=c(0,1,1), period=12))
+```
+
+Bic
+
+```{r}
+mod2$bic
+```
+
+Testes de normalidade, Homocedastidade e independência
+
+```{r}
+# Normalidade
+jarque.bera.test(mod2$residuals)
+# Homocedastidade
+ArchTest(mod2$residuals,lags = 10)
+#independência
+Box.test(mod2$residuals,lag=10,type="Ljung-Box")
+```
+
+Previsão
+
+```{r}
+prev<-forecast::forecast(mod2, h=12, start = c(2020,8))
+prev
+```
+
+Precisão
+
+```{r}
+accuracy(prev, teste)
+```
+
+Plot
+
+```{r}
+plot(forecast::forecast(mod2, h=12, level = 0.95))
+```
